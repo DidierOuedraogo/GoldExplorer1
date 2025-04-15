@@ -670,19 +670,40 @@ elif page == "Analyse de données":
         )
         
         if distance_var in st.session_state.data.columns:
-            # Créer des bins pour la distance
-            bins = [0, 100, 200, 500, 1000, 2000, 5000]
-            labels = ['0-100', '100-200', '200-500', '500-1000', '1000-2000', '2000+']
-            
             df_binned = st.session_state.data.copy()
-            df_binned['distance_bin'] = pd.cut(df_binned[distance_var], bins=bins, labels=labels, right=False)
             
-            fig = px.box(df_binned, x='distance_bin', y='teneur_or', 
-                         color='distance_bin',
-                         title=f"Teneurs en or selon la {distance_var}",
-                         labels={'distance_bin': f'{distance_var} (m)', 'teneur_or': 'Teneur en or (g/t)'},
-                         category_orders={"distance_bin": labels})
-            st.plotly_chart(fig, use_container_width=True)
+            # Utiliser qcut pour créer des bins de taille égale basés sur les quantiles
+            n_bins = 5  # Nombre de bins
+            
+            # Vérifier qu'il y a suffisamment de valeurs uniques pour créer des bins
+            unique_values = df_binned[distance_var].nunique()
+            if unique_values < n_bins:
+                st.warning(f"Pas assez de valeurs uniques ({unique_values}) pour créer {n_bins} groupes. Utilisation de {unique_values} groupes à la place.")
+                n_bins = max(2, unique_values)  # au moins 2 groupes si possible
+            
+            try:
+                df_binned['distance_bin'] = pd.qcut(
+                    df_binned[distance_var], 
+                    q=n_bins, 
+                    duplicates='drop'  # Important pour gérer les valeurs dupliquées
+                )
+                
+                # Convertir en chaîne pour l'affichage
+                df_binned['distance_bin'] = df_binned['distance_bin'].astype(str)
+                
+                fig = px.box(
+                    df_binned.dropna(subset=['distance_bin']),  # Supprimer les valeurs NaN
+                    x='distance_bin', 
+                    y='teneur_or',
+                    color='distance_bin',
+                    title=f"Teneurs en or selon la {distance_var}",
+                    labels={'distance_bin': f'{distance_var} (m)', 'teneur_or': 'Teneur en or (g/t)'}
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+            except ValueError as e:
+                st.error(f"Impossible de créer les bins pour la variable {distance_var}: {e}")
+                st.info("Essayez d'utiliser une autre variable de distance ou de modifier vos données.")
 
 elif page == "Prédiction de potentiel":
     st.markdown("<h1 class='main-title'>Prédiction du Potentiel Aurifère</h1>", unsafe_allow_html=True)
@@ -950,15 +971,13 @@ elif page == "Machine Learning":
         if st.session_state.get('ml_predictions') is not None:
             st.subheader(f"Prédictions pour {st.session_state.ml_target}")
             
-            # Carte de chaleur des prédictions
+            # Carte de chaleur des prédictions simplifiée (sans mapbox)
             df_map = st.session_state.data.copy()
             
-            fig = px.scatter_mapbox(
-                df_map, lat='y', lon='x', 
+            fig = px.scatter(
+                df_map, x='x', y='y', 
                 color='ml_prediction', size='ml_prediction',
                 color_continuous_scale='Inferno',
-                mapbox_style="carto-positron",
-                zoom=8,
                 title=f"Carte des prédictions par {st.session_state.ml_algorithm}"
             )
             
@@ -1038,10 +1057,10 @@ elif page == "Machine Learning":
         col1, col2 = st.columns(2)
         
         with col1:
+            # Version sans ligne de tendance (pour éviter la dépendance à statsmodels)
             fig = px.scatter(
                 df_comparison, x=st.session_state.ml_target, y='ml_prediction',
                 color='type_roche', hover_data=['x', 'y', 'z'],
-                trendline='ols',
                 title=f"Corrélation entre valeurs observées et prédites",
                 color_discrete_sequence=px.colors.qualitative.Bold
             )
@@ -1229,6 +1248,11 @@ elif page == "Visualisation 3D":
             
             # Créer des bins pour la profondeur
             bins = list(range(int(z_min - z_min % bin_size), int(z_max + bin_size), bin_size))
+            
+            # S'assurer qu'il y a au moins 2 bins
+            if len(bins) < 2:
+                bins = [z_min, (z_min + z_max) / 2, z_max]
+            
             labels = [f"{bins[i]}-{bins[i+1]}" for i in range(len(bins)-1)]
             
             df_binned = st.session_state.data.copy()
@@ -1237,14 +1261,18 @@ elif page == "Visualisation 3D":
             # Calculer la moyenne du potentiel par bin de profondeur
             potential_by_depth = df_binned.groupby('z_bin')['potentiel_aurifere'].mean().reset_index()
             
-            fig = px.bar(
-                potential_by_depth, x='z_bin', y='potentiel_aurifere',
-                color='potentiel_aurifere', color_continuous_scale='Inferno',
-                labels={'z_bin': 'Intervalle de profondeur (m)', 'potentiel_aurifere': 'Potentiel aurifère moyen'},
-                title="Potentiel aurifère moyen par intervalle de profondeur"
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
+            # Vérifier que potential_by_depth n'est pas vide
+            if not potential_by_depth.empty:
+                fig = px.bar(
+                    potential_by_depth, x='z_bin', y='potentiel_aurifere',
+                    color='potentiel_aurifere', color_continuous_scale='Inferno',
+                    labels={'z_bin': 'Intervalle de profondeur (m)', 'potentiel_aurifere': 'Potentiel aurifère moyen'},
+                    title="Potentiel aurifère moyen par intervalle de profondeur"
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("Pas assez de données pour créer l'histogramme par profondeur.")
 
 elif page == "À propos":
     st.markdown("<h1 class='main-title'>À Propos de GoldExplorerAI</h1>", unsafe_allow_html=True)
